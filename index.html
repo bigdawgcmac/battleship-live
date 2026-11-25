@@ -1,0 +1,196 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Battleship Live</title>
+<meta name="description" content="You've been challenged to a live game of Battleship. Each captain plays on their own computer.">
+<meta property="og:title" content="Battleship Live">
+<meta property="og:description" content="You've been challenged to a live game of Battleship. Click to join the battle.">
+<meta property="og:type" content="website">
+<meta name="theme-color" content="#030b26">
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 64 64'%3E%3Ccircle cx='32' cy='32' r='30' fill='%230b1f65' stroke='%233ce0d8' stroke-width='3'/%3E%3Ccircle cx='32' cy='32' r='18' fill='none' stroke='%2300a9f4' stroke-width='2'/%3E%3Cpath d='M32 32 L58 20 A30 30 0 0 1 62 32 Z' fill='%233ce0d8' opacity='.7'/%3E%3Ccircle cx='42' cy='24' r='4' fill='%23ff6a2b'/%3E%3C/svg%3E">
+<link rel="stylesheet" href="styles.css">
+<script src="https://cdn.jsdelivr.net/npm/peerjs@1.5.5/dist/peerjs.min.js" defer></script>
+<script src="https://cdn.jsdelivr.net/npm/mqtt@5.16.1/dist/mqtt.min.js" defer></script>
+<script src="js/sound.js" defer></script>
+<script src="js/net.js" defer></script>
+<script src="js/game.js" defer></script>
+</head>
+<body>
+
+<header class="topbar">
+  <a class="brand" href="./" title="Start over">
+    <span class="brand-icon" aria-hidden="true"><span class="sweep"></span></span>
+    <span class="brand-word">BATTLESHIP</span><span class="brand-live">LIVE</span>
+  </a>
+  <div class="top-right">
+    <span id="codeTag" class="code-tag hidden"></span>
+    <div id="connPill" class="pill hidden" role="status"><span class="dot"></span><span id="connText">Offline</span></div>
+    <button id="muteBtn" class="icon-btn" type="button" aria-label="Sound on or off" title="Sound on/off"></button>
+  </div>
+</header>
+
+<main id="app">
+
+  <!-- HOME -->
+  <section id="scr-home" class="screen">
+    <div class="hero">
+      <div class="hero-text">
+        <p class="kicker">Two captains. Two computers. One ocean.</p>
+        <h1>Sink your friend's fleet, live.</h1>
+        <p class="lead">Create a game, send the link, hide your ships, and trade missile fire in real time, each of you on your own screen.</p>
+        <div class="card form-card">
+          <label for="nameHome">Your captain name</label>
+          <input id="nameHome" maxlength="16" placeholder="e.g. Admiral Nelson" autocomplete="nickname">
+          <button id="createBtn" class="btn primary big" type="button">Create a new game</button>
+          <div class="or"><span>or join with a code</span></div>
+          <div class="row">
+            <input id="codeInput" class="code-input" maxlength="6" placeholder="GAME CODE" autocomplete="off" spellcheck="false">
+            <button id="joinCodeBtn" class="btn ghost" type="button">Join</button>
+          </div>
+          <p id="homeErr" class="err"></p>
+        </div>
+      </div>
+      <div class="hero-art" aria-hidden="true">
+        <div class="radar big"><div class="sweep"></div><i class="blip b1"></i><i class="blip b2"></i><i class="blip b3"></i></div>
+      </div>
+    </div>
+    <ol class="how">
+      <li><b>Create and invite.</b> Make a game, then email or text the link to your opponent.</li>
+      <li><b>Deploy in secret.</b> Each captain places five ships on their own computer.</li>
+      <li><b>Open fire.</b> Take turns calling shots. Sink all five enemy ships to win.</li>
+    </ol>
+  </section>
+
+  <!-- JOIN (arrived from an invite link) -->
+  <section id="scr-join" class="screen">
+    <div class="card center-card">
+      <div class="radar"><div class="sweep"></div><i class="blip b1"></i></div>
+      <p class="kicker">Incoming transmission</p>
+      <h1>You've been challenged to Battleship</h1>
+      <p class="lead">Game code <strong id="joinCode" class="mono"></strong></p>
+      <label for="nameJoin">Your captain name</label>
+      <input id="nameJoin" maxlength="16" placeholder="e.g. Admiral Nelson" autocomplete="nickname">
+      <button id="joinBtn" class="btn primary big" type="button">Join the battle</button>
+      <p class="hint">Turn your sound on for the full experience.</p>
+    </div>
+  </section>
+
+  <!-- MESSAGE (full / errors) -->
+  <section id="scr-msg" class="screen">
+    <div class="card center-card">
+      <p class="kicker">Signal lost</p>
+      <h1 id="msgTitle">Something went wrong</h1>
+      <p id="msgText" class="lead"></p>
+      <a class="btn primary big" href="./">Start a new game</a>
+    </div>
+  </section>
+
+  <!-- PLACEMENT -->
+  <section id="scr-place" class="screen">
+    <div class="place-layout">
+      <div class="place-main">
+        <div class="board-head"><h2>Deploy your fleet</h2><span id="placeRound" class="tag"></span></div>
+        <div id="placeBoard" class="board"></div>
+        <p class="hint">Click a ship, then click the grid. Press <kbd>R</kbd> or right-click to rotate. Click a placed ship to move it.</p>
+      </div>
+      <div class="place-side" id="placeSide">
+        <div id="inviteCard" class="card invite hidden">
+          <p class="kicker">Step 1</p>
+          <h3>Invite your opponent</h3>
+          <p class="small">Send them this link. When they open it, they'll join your game.</p>
+          <div class="link-row">
+            <input id="inviteLink" readonly aria-label="Invite link">
+            <button id="copyLinkBtn" class="btn ghost sm" type="button">Copy</button>
+          </div>
+          <div class="row wrap">
+            <a id="emailBtn" class="btn primary sm" href="#">Email invite</a>
+            <button id="copyInviteBtn" class="btn ghost sm" type="button">Copy invite message</button>
+            <button id="shareBtn" class="btn ghost sm hidden" type="button">Share…</button>
+          </div>
+          <p class="small muted">Game code <b id="inviteCode" class="mono"></b>. Keep this tab open while you play.</p>
+        </div>
+
+        <div id="oppCard" class="card opp">
+          <div class="radar small"><div class="sweep"></div></div>
+          <div>
+            <p class="kicker" id="oppKicker">Opponent</p>
+            <p id="oppText" class="opp-text">Waiting for your opponent…</p>
+          </div>
+        </div>
+
+        <div class="card">
+          <h3>Your fleet</h3>
+          <ul id="dock" class="dock"></ul>
+          <div class="row wrap">
+            <button id="rotateBtn" class="btn ghost sm" type="button">Rotate (R)</button>
+            <button id="randomBtn" class="btn ghost sm" type="button">Random</button>
+            <button id="clearBtn" class="btn ghost sm" type="button">Clear</button>
+          </div>
+          <button id="readyBtn" class="btn primary big" type="button" disabled>Ready for battle</button>
+          <button id="unreadyBtn" class="btn link hidden" type="button">Change my ships</button>
+          <p id="readyNote" class="hint"></p>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- BATTLE -->
+  <section id="scr-battle" class="screen">
+    <div id="turnBar" class="turnbar"><span class="turn-dot"></span><span id="turnText"></span><button id="turnRematch" class="btn primary sm hidden" type="button">Rematch</button></div>
+    <div class="battle-layout">
+      <div class="board-wrap">
+        <div class="board-head"><h2>Enemy waters</h2><span id="enemyTag" class="tag"></span></div>
+        <div id="targetBoard" class="board target"></div>
+        <div id="enemyFleet" class="fleet-status"></div>
+      </div>
+      <div class="board-wrap">
+        <div class="board-head"><h2>Your fleet</h2><span id="myTag" class="tag"></span></div>
+        <div id="ownBoard" class="board own"></div>
+        <div id="myFleet" class="fleet-status"></div>
+      </div>
+      <aside class="side" id="battleSide">
+        <div class="card score-card">
+          <div id="scoreLine" class="score-line"></div>
+          <div class="stats">
+            <div><span id="stShots">0</span><label>Shots</label></div>
+            <div><span id="stHits">0</span><label>Hits</label></div>
+            <div><span id="stAcc">–</span><label>Accuracy</label></div>
+          </div>
+        </div>
+      </aside>
+    </div>
+  </section>
+
+  <!-- Shared log + chat (moved between screens) -->
+  <div id="logCard" class="card log-card hidden">
+    <h3>Battle log</h3>
+    <ul id="log" class="log" aria-live="polite"></ul>
+    <form id="chatForm" class="chat" autocomplete="off">
+      <input id="chatInput" maxlength="200" placeholder="Message your opponent…">
+      <button class="btn ghost sm" type="submit">Send</button>
+    </form>
+  </div>
+
+</main>
+
+<!-- GAME OVER -->
+<div id="overlay" class="overlay hidden" role="dialog" aria-modal="true" aria-labelledby="overTitle">
+  <div class="card over-card">
+    <p class="kicker" id="overKicker"></p>
+    <h1 id="overTitle"></h1>
+    <p id="overText" class="lead"></p>
+    <div id="overStats" class="stats"></div>
+    <div class="row wrap center">
+      <button id="rematchBtn" class="btn primary big" type="button">Rematch</button>
+      <button id="viewBtn" class="btn ghost" type="button">View boards</button>
+    </div>
+    <p id="rematchNote" class="hint"></p>
+  </div>
+</div>
+
+<div id="toast" class="toast" role="status"></div>
+<noscript><p class="lead" style="padding:2rem">Battleship Live needs JavaScript turned on.</p></noscript>
+</body>
+</html>
