@@ -11,6 +11,8 @@ window.Sound = (() => {
     if (!ctx) {
       const AC = window.AudioContext || window.webkitAudioContext;
       if (!AC) return null;
+      // iPhone: treat game sound as media so it plays even when the ring/silent switch is on silent (iOS 17+).
+      try { if (navigator.audioSession && navigator.audioSession.type !== 'playback') navigator.audioSession.type = 'playback'; } catch (e) { /* unsupported */ }
       ctx = new AC();
       const comp = ctx.createDynamicsCompressor();
       comp.threshold.value = -14; comp.knee.value = 10; comp.ratio.value = 4;
@@ -23,10 +25,28 @@ window.Sound = (() => {
       const d = noiseBuf.getChannelData(0);
       for (let i = 0; i < len; i++) d[i] = Math.random() * 2 - 1;
     }
-    if (ctx.state === 'suspended') ctx.resume().catch(() => {});
+    // 'suspended' before the first tap; 'interrupted' on iPhone after a call or switching apps.
+    if (ctx.state !== 'running' && ctx.state !== 'closed' && ctx.resume) {
+      try { const p = ctx.resume(); if (p && p.catch) p.catch(() => {}); } catch (e) { /* needs a tap */ }
+    }
     return ctx;
   }
   const live = () => (muted ? null : ac());
+
+  // Must run inside a tap/click/keypress: iPhone only starts audio from a user gesture.
+  // Playing a one-sample silent buffer inside the gesture fully unlocks older iOS versions too.
+  function unlock() {
+    if (muted) return;
+    const c = ac();
+    if (!c || c.state === 'running') return;
+    try {
+      const s = c.createBufferSource();
+      s.buffer = c.createBuffer(1, 1, 22050);
+      s.connect(c.destination);
+      s.start(0);
+    } catch (e) { /* ignore */ }
+  }
+  document.addEventListener('visibilitychange', () => { if (!document.hidden && ctx && !muted) ac(); });
 
   // ---- building blocks ----
   function env(t, pts, dest = out) {
@@ -198,11 +218,11 @@ window.Sound = (() => {
     muted = !!m;
     try { localStorage.setItem(MUTE_KEY, muted ? '1' : '0'); } catch (e) { /* ignore */ }
     if (out) out.gain.setTargetAtTime(muted ? 0 : VOLUME, ctx.currentTime, 0.02);
-    if (!muted) ac();
+    if (!muted) unlock();
   }
 
   return {
-    unlock: () => { if (!muted) ac(); },
+    unlock,
     isMuted: () => muted,
     setMuted,
     launch, whistle, splash, boom, sunk, ping, place, tick, error, blip, join, ready, start, victory, defeat,

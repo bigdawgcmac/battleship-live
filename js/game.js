@@ -18,6 +18,8 @@
   const SETTLE = Math.round(700 * SPEED);
   const SETTLE_SUNK = Math.round(1500 * SPEED);
   const VERSION = 1;
+  const TOUCH = !!(window.matchMedia && matchMedia('(pointer: coarse)').matches); // phones and tablets
+  const stacked = () => !!(window.matchMedia && matchMedia('(max-width: 760px)').matches); // boards stacked vertically
   const K = { name: 'bslive:name', game: 'bslive:game:', alive: 'bslive:alive:', tab: 'bslive:tab:' };
   const CODE_ALPHA = 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789';
 
@@ -354,6 +356,7 @@
     }
     save();
     show('battle');
+    window.scrollTo(0, 0);
   }
 
   function onTargetClick(r, c) {
@@ -408,7 +411,10 @@
     hold('o', r, c, FLIGHT);
     setBusy(FLIGHT + settle, 'Incoming fire!');
     Sound.whistle();
-    flyMissile(ui.boards.target.sea, ui.boards.own, r, c, FLIGHT);
+    // On a phone the boards are stacked: bring my fleet into view, then let the missile fly in.
+    const lead = stacked() ? Math.round(Math.min(400, FLIGHT / 3)) : 0;
+    if (lead) focusBoard('own');
+    setTimeout(() => flyMissile(ui.boards.target.sea, ui.boards.own, r, c, FLIGHT - lead), lead);
     setTimeout(() => {
       impactFx(ui.boards.own, r, c, res);
       const at = coord(r, c), nm = ship ? SHIP[ship.id].name : '';
@@ -417,7 +423,11 @@
       else { Sound.sunk(); ui.busyLabel = `Your ${nm} was sunk!`; addLog('opp-sunk', `${oppName()} fired at ${at} and sank your ${nm}!`); }
       render();
     }, FLIGHT);
-    setTimeout(() => { if (myTurn()) Sound.ping(); }, FLIGHT + settle + 40);
+    setTimeout(() => {
+      if (!myTurn()) return;
+      Sound.ping();
+      setTimeout(() => focusBoard('target'), Math.round(450 * SPEED));
+    }, FLIGHT + settle + 40);
     checkOver(); save(); render();
   }
 
@@ -488,6 +498,7 @@
     Sound.ready();
     save();
     show('place');
+    window.scrollTo(0, 0);
   }
 
   // ---------- placement ----------
@@ -516,17 +527,20 @@
   }
   function rotate() {
     if (!S || S.phase !== 'place' || S.ready) return;
-    if (!ui.sel && ui.hover) {
-      const s = shipAt(ui.hover.r, ui.hover.c);
-      if (s) {
-        const nd = s.dir === 'h' ? 'v' : 'h';
-        if (fits(s.id, s.r, s.c, nd, S.ships)) { s.dir = nd; Sound.place(); save(); render(); } else Sound.error();
-        return;
-      }
-    }
+    const turnInPlace = (s) => {
+      const nd = s.dir === 'h' ? 'v' : 'h';
+      if (!fits(s.id, s.r, s.c, nd, S.ships)) { Sound.error(); toast('No room to turn it there. Move it first.'); return; }
+      s.dir = nd; ui.dir = nd; ui.sel = null;
+      Sound.place(); save(); render();
+    };
+    // Mouse resting on a placed ship with nothing selected: turn that ship.
+    if (!ui.sel && ui.hover) { const s = shipAt(ui.hover.r, ui.hover.c); if (s) { turnInPlace(s); return; } }
+    // A placed ship is selected and there's no hover preview (phones, or mouse off the grid): turn it where it sits.
+    const placedSel = ui.sel ? S.ships.find(s => s.id === ui.sel) : null;
+    if (placedSel && !ui.hover) { turnInPlace(placedSel); return; }
     ui.dir = ui.dir === 'h' ? 'v' : 'h';
     Sound.tick();
-    renderPreview();
+    render();
   }
   function setReady(v) {
     if (!S || S.phase !== 'place') return;
@@ -547,6 +561,12 @@
     ui.busyUntil = Math.max(ui.busyUntil, now() + ms);
     ui.busyLabel = label;
     setTimeout(render, ms + 40);
+  }
+
+  function focusBoard(which) {
+    if (!stacked() || ui.screen !== 'battle' || document.hidden) return;
+    const b = ui.boards[which];
+    if (b) b.el.scrollIntoView({ behavior: 'smooth', block: 'center' });
   }
 
   const MISSILE_SVG = '<svg viewBox="0 0 60 20"><path class="flame" d="M18 10 L0 4 L6 10 L0 16 Z" fill="#ffb23d"/><path d="M18 10 L7 7 L10 10 L7 13 Z" fill="#fff3c4"/><rect x="16" y="7" width="32" height="6" rx="2" fill="#dfe8ff"/><path d="M48 7 L58 10 L48 13 Z" fill="#ff6a2b"/><path d="M18 7 L13 2 L25 7 Z M18 13 L13 18 L25 13 Z" fill="#8ea3d1"/></svg>';
@@ -710,6 +730,8 @@
       ? `Place ${FLEET.length - S.ships.length} more ship${FLEET.length - S.ships.length === 1 ? '' : 's'}, or press Random.`
       : S.ready ? '' : 'The battle starts when both captains are ready.';
     ['rotateBtn', 'randomBtn', 'clearBtn'].forEach(id => { $(id).disabled = S.ready; });
+    const selUnplaced = ui.sel && !S.ships.some(s => s.id === ui.sel);
+    $('rotateBtn').textContent = selUnplaced ? `Rotate: ${ui.dir === 'h' ? 'horizontal' : 'vertical'}` : (TOUCH ? 'Rotate' : 'Rotate (R)');
     $('placeRound').textContent = S.round > 1 ? 'Round ' + S.round : '';
     $('inviteCard').classList.toggle('hidden', !(S.role === 'host' && !S.guestToken));
     const [kick, text, joined] = oppStatus();
@@ -990,7 +1012,11 @@
 
   // ---------- wiring ----------
   function wire() {
-    document.addEventListener('pointerdown', () => Sound.unlock(), { passive: true });
+    // iPhone only allows audio to start inside certain gestures (touchend/click, not touch pointerdown).
+    ['pointerdown', 'pointerup', 'touchend', 'click', 'keydown'].forEach(ev =>
+      document.addEventListener(ev, () => Sound.unlock(), { passive: true, capture: true }));
+    // Safari restores pages from its back/forward cache with dead connections: reload instead (state is saved).
+    window.addEventListener('pageshow', e => { if (e.persisted) location.reload(); });
     $('muteBtn').onclick = () => { Sound.setMuted(!Sound.isMuted()); renderMute(); if (!Sound.isMuted()) Sound.tick(); };
 
     $('createBtn').onclick = createGame;
@@ -1006,13 +1032,16 @@
     $('nameJoin').addEventListener('keydown', e => { if (e.key === 'Enter') $('joinBtn').click(); });
 
     const P = ui.boards.place;
-    P.sea.addEventListener('mousemove', e => {
+    // Hover preview only for a real mouse/pen; taps would otherwise leave a stale preview behind.
+    P.sea.addEventListener('pointermove', e => {
+      if (e.pointerType === 'touch') return;
       const cell = e.target.closest('.cell');
       if (!cell) return;
       const h = { r: +cell.dataset.r, c: +cell.dataset.c };
       if (!ui.hover || ui.hover.r !== h.r || ui.hover.c !== h.c) { ui.hover = h; renderPreview(); }
     });
-    P.sea.addEventListener('mouseleave', () => { ui.hover = null; renderPreview(); });
+    P.sea.addEventListener('pointerleave', () => { if (ui.hover) { ui.hover = null; renderPreview(); } });
+    P.sea.addEventListener('pointerdown', e => { if (e.pointerType === 'touch' && ui.hover) { ui.hover = null; renderPreview(); } });
     P.sea.addEventListener('click', e => { const cell = e.target.closest('.cell'); if (cell) onPlaceCell(+cell.dataset.r, +cell.dataset.c); });
     P.sea.addEventListener('contextmenu', e => { e.preventDefault(); rotate(); });
     $('dock').addEventListener('click', e => {
@@ -1059,6 +1088,7 @@
     wire();
     renderMute();
     pruneOld();
+    if (TOUCH) $('placeHint').textContent = 'Tap a ship in your fleet, then tap the grid. To turn a placed ship, tap it, then tap Rotate. To move one, tap it, then tap a new spot.';
     const name = store.get(K.name) || '';
     $('nameHome').value = name;
     $('nameJoin').value = name;

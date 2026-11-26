@@ -29,7 +29,7 @@ window.Net = (() => {
       Object.assign(this, { code, role, token, makeHello, onMessage, onStatus, onFatal });
       this.sid = rand(8); this.seq = 0;
       this.active = null; this.peerToken = null; this.welcomed = false; this.everAdopted = false;
-      this.lastRecv = 0; this.lastSent = 0; this.lastHello = 0;
+      this.lastRecv = 0; this.lastSent = 0; this.lastHello = 0; this.lastPong = 0;
       this.seen = new Set(); this.seenQ = [];
       this.peer = null; this.dial = null; this.signalOk = false; this.peerUnavail = 0;
       this.mqtts = []; this.relayChs = new Map(); this.relayEntry = null; this.relayWanted = false;
@@ -47,10 +47,41 @@ window.Net = (() => {
       this._timer = setInterval(() => this._tick(), 1000);
       window.addEventListener('pagehide', () => { if (this.active) this._raw(this.active, { t: 'bye' }); });
       document.addEventListener('visibilitychange', () => {
-        if (document.visibilityState !== 'visible' || this.destroyed) return;
-        if (this.connected) this.send({ t: 'ping' });
-        else if (this.role === 'guest') this._guestConnect();
+        if (this.destroyed) return;
+        if (document.visibilityState === 'visible') this._probe();
       });
+      window.addEventListener('online', () => this._probe());
+    }
+
+    // Phones (iPhone especially) freeze the page when locked or switched away from, which can
+    // silently kill the connection. On return, check the link; if it's dead, rebuild it fast.
+    _probe() {
+      if (this.destroyed) return;
+      if (!this.connected) {
+        if (this.role === 'guest') this._guestConnect(); else this._kick();
+        return;
+      }
+      const sentAt = Date.now();
+      this.send({ t: 'ping', probe: 1 });
+      this._schedule(() => {
+        if (!this.connected || this.lastPong >= sentAt) return;
+        this._lost(this.active);              // guest: reconnects; host: marks opponent offline
+        if (this.role === 'host') this._kick();
+      }, 4000);
+    }
+
+    // Host: ask the guest, through the relay, to reconnect right away.
+    _kick() {
+      if (this.role !== 'host' || !this.peerToken || !this.mqtts.length) return;
+      const topic = `${TOPIC}${this.code}/g/${this.peerToken}`;
+      let tries = 0;
+      const send = () => {
+        if (this.destroyed || this.connected || tries++ >= 5) return;
+        const body = JSON.stringify({ t: 'rejoin', mid: this.sid + '.' + (++this.seq) });
+        this.mqtts.forEach(m => { try { m.client.publish(topic, body, { qos: 1 }); } catch (e) { /* queued or offline */ } });
+        this._schedule(send, 3000);
+      };
+      send();
     }
 
     destroy() {
@@ -93,6 +124,10 @@ window.Net = (() => {
         this.seen.add(o.mid); this.seenQ.push(o.mid);
         if (this.seenQ.length > 800) this.seen.delete(this.seenQ.shift());
       }
+      if (o.t === 'rejoin') {                  // host asked us to rebuild the connection
+        if (this.role === 'guest') { if (this.active) this._lost(this.active); else this._guestConnect(); }
+        return;
+      }
       if (this.role === 'guest') {
         if (o.t === 'welcome') {
           this.welcomed = true; this.active = ch; this.helloChs.clear(); this.peerUnavail = 0;
@@ -105,7 +140,8 @@ window.Net = (() => {
       } else if (o.tk && o.tk === this.peerToken) {
         this.lastRecv = Date.now();
       }
-      if (o.t === 'ping') return;
+      if (o.t === 'ping') { if (o.probe) this._raw(ch, { t: 'pong' }); return; }
+      if (o.t === 'pong') { this.lastPong = Date.now(); return; }
       if (o.t === 'bye') {
         if (this.role === 'guest' || o.tk === this.peerToken) this._lost(this.active);
         return;
@@ -117,6 +153,7 @@ window.Net = (() => {
       if (!ch) return;
       if (this.active !== ch) { this.helloChs.delete(ch); return; }
       this.active = null;
+      if (ch.kind === 'p2p' && ch.conn && typeof ch.conn.close === 'function') { try { ch.conn.close(); } catch (e) { /* ignore */ } }
       if (this.role === 'guest') {
         this.welcomed = false;
         this._setStatus('reconnecting');
@@ -166,7 +203,7 @@ window.Net = (() => {
 
     _hostPeer(attempt) {
       if (this.destroyed) return;
-      if (typeof Peer === 'undefined') return;
+      if (!Net.p2pSupported()) return;
       const peer = this.peer = new Peer(PEER_PREFIX + this.code.toLowerCase(), { debug: 1 });
       peer.on('open', () => { this.signalOk = true; this._hostIdle(); });
       peer.on('connection', (conn) => this._wireConn(conn));
@@ -202,7 +239,7 @@ window.Net = (() => {
 
     _guestConnect() {
       if (this.destroyed || this.connected) return;
-      if (this.mode === 'relay' || typeof Peer === 'undefined') { this._relayHello(); return; }
+      if (this.mode === 'relay' || !Net.p2pSupported()) { this._relayHello(); return; }
       this._ensureGuestPeer(() => this._dialNow());
     }
 
@@ -341,6 +378,9 @@ window.Net = (() => {
       this._sendHellos();
     }
   }
+
+  // Direct connections need PeerJS loaded and WebRTC in the browser; otherwise the relay is used.
+  Net.p2pSupported = () => typeof Peer !== 'undefined' && typeof RTCPeerConnection !== 'undefined';
 
   return Net;
 })();

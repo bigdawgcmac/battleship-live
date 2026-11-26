@@ -20,6 +20,13 @@ Your opponent only needs the link. They don't need an account or any installs.
 - **Sound:** synthesized effects for launches, splashes, explosions, sinkings and victory. Use the speaker button to mute.
 - **Connection:** players connect directly, browser to browser (WebRTC through PeerJS). If a network blocks that, the game switches to a public relay on its own. The status pill shows "Connected (relay)" when that happens.
 
+## iPhone and phones
+
+- Works in Safari or Chrome on iPhone, and in phone browsers generally. The two boards stack, and the page scrolls to your fleet when fire comes in, then back to enemy waters on your turn.
+- Placing ships: tap a ship in your fleet, then tap the grid. To turn a placed ship, tap it, then tap **Rotate**.
+- Sounds play even with the ring/silent switch on silent (iOS 17 and later). Game sounds may pause music playing in another app.
+- Locking the phone or switching apps pauses the game. When you come back it checks the connection and reconnects within a few seconds.
+
 ## Files
 
 - `index.html`: page layout
